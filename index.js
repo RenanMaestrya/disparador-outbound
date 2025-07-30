@@ -83,13 +83,15 @@ async function main() {
 
     if (args.includes("--clear-history")) {
       const disparador = new DisparadorWhatsApp(config);
-      disparador.limparHistorico();
+      await disparador.controleEnvios.inicializar();
+      await disparador.limparHistorico();
       return;
     }
 
     if (args.includes("--show-history")) {
       const disparador = new DisparadorWhatsApp(config);
-      disparador.mostrarHistorico();
+      await disparador.controleEnvios.inicializar();
+      await disparador.mostrarHistorico();
       return;
     }
 

@@ -18,6 +18,7 @@ config.env
 
 # Controle de envios (dados sensíveis)
 envios-realizados.json
+envios.db
 
 # Logs
 logs/

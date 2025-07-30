@@ -8,7 +8,7 @@ const QRCode = require("qrcode");
 const P = require("pino");
 const AuthManager = require("./auth");
 const PlanilhaManager = require("./planilha");
-const ControleEnvios = require("./controle-envios");
+const ControleEnviosSQLite = require("./controle-envios-sqlite");
 const HorarioScheduler = require("./horario-scheduler");
 
 class DisparadorWhatsApp {
@@ -16,13 +16,15 @@ class DisparadorWhatsApp {
     this.config = config;
     this.authManager = new AuthManager();
     this.planilhaManager = new PlanilhaManager(config.planilhaPath);
-    this.controleEnvios = new ControleEnvios();
+    this.controleEnvios = new ControleEnviosSQLite();
     this.horarioScheduler = new HorarioScheduler(this);
     this.sock = null;
     this.contatos = [];
     this.mensagens = [];
     this.enviados = 0;
     this.conectado = false;
+    this.disparoIniciado = false;
+    this.disparoEmAndamento = false;
 
     // Configurações de tempo
     this.minTempoEntreEnvios = config.minTempoEntreEnvios || 30000; // 30 segundos
@@ -36,6 +38,9 @@ class DisparadorWhatsApp {
   async inicializar() {
     try {
       console.log("🚀 Iniciando disparador de mensagens WhatsApp...");
+
+      // Inicializar controle de envios SQLite
+      await this.controleEnvios.inicializar();
 
       // Carregar contatos da planilha
       await this.carregarContatos();
@@ -61,8 +66,9 @@ class DisparadorWhatsApp {
       this.controleEnvios.mostrarHistorico();
 
       // Filtrar contatos que ainda não receberam mensagens
-      this.contatos =
-        this.controleEnvios.filtrarContatosNaoEnviados(todosContatos);
+      this.contatos = await this.controleEnvios.filtrarContatosNaoEnviados(
+        todosContatos
+      );
 
       console.log(`📤 ${this.contatos.length} contatos pendentes para envio`);
 
@@ -148,7 +154,8 @@ class DisparadorWhatsApp {
         this.conectado = true;
 
         // Se não há horário configurado, iniciar disparo imediatamente
-        if (!this.configuracoes?.horarioInicio) {
+        if (!this.configuracoes?.horarioInicio && !this.disparoIniciado) {
+          this.disparoIniciado = true;
           await this.iniciarDisparo();
         }
       }
@@ -166,14 +173,19 @@ class DisparadorWhatsApp {
           DisconnectReason.loggedOut;
 
         if (shouldReconnect) {
-          console.log("🔄 Reconectando em 5 segundos...");
+          console.log("🔄 Reconectando em 10 segundos...");
           setTimeout(async () => {
             try {
+              console.log("🔄 Tentando reconectar...");
               await this.configurarSocket();
             } catch (error) {
               console.log("❌ Erro ao reconectar:", error.message);
+              console.log("🔄 Nova tentativa em 30 segundos...");
+              setTimeout(() => {
+                this.tentarReconexao();
+              }, 30000);
             }
-          }, 5000);
+          }, 10000);
         }
       }
     });
@@ -183,14 +195,20 @@ class DisparadorWhatsApp {
   }
 
   async iniciarDisparo() {
+    if (this.disparoEmAndamento) {
+      console.log("⏸️ Disparo já em andamento, ignorando...");
+      return;
+    }
+
     if (this.contatos.length === 0) {
       console.log("❌ Nenhum contato para enviar mensagens");
       return;
     }
 
+    this.disparoEmAndamento = true;
     console.log(`📤 Iniciando disparo de ${this.contatos.length} mensagens...`);
-    console.log("⏰ Tempos aleatórios entre envios: 30s - 2min");
-    console.log("⏸️  Pausas extras a cada 10-14 envios: 5-10min");
+    console.log("⏰ Tempos aleatórios entre envios: 5s - 15s");
+    console.log("⏸️  Pausas extras a cada 10-14 envios: 1-2min");
     console.log("");
 
     const intervaloEntreGrupos = this.getNumeroAleatorio(
@@ -202,22 +220,33 @@ class DisparadorWhatsApp {
       const contato = this.contatos[i];
 
       try {
-        await this.enviarMensagem(contato);
-        this.enviados++;
+        const sucesso = await this.enviarMensagem(contato);
 
-        // Verificar se precisa fazer pausa extra
-        if (this.enviados % intervaloEntreGrupos === 0) {
-          await this.fazerPausaExtra();
-        } else if (i < this.contatos.length - 1) {
-          // Não pausar após o último envio
-          await this.fazerPausaNormal();
+        // Se o envio foi bem-sucedido
+        if (sucesso !== false) {
+          this.enviados++;
+
+          // Verificar se precisa fazer pausa extra
+          if (this.enviados % intervaloEntreGrupos === 0) {
+            await this.fazerPausaExtra();
+          } else if (i < this.contatos.length - 1) {
+            // Não pausar após o último envio
+            await this.fazerPausaNormal();
+          }
+        } else {
+          // Se falhou por desconexão, parar o loop
+          console.log("⏸️ Pausando envios devido à desconexão...");
+          break;
         }
       } catch (error) {
         console.error(`❌ Erro ao enviar para ${contato.nome}:`, error.message);
+        // Continuar com o próximo contato
+        continue;
       }
     }
 
     console.log(`\n✅ Disparo concluído! ${this.enviados} mensagens enviadas.`);
+    this.disparoEmAndamento = false;
   }
 
   async enviarMensagem(contato) {
@@ -233,15 +262,27 @@ class DisparadorWhatsApp {
     console.log(`📤 Enviando para ${contato.nome} (${contato.telefone})...`);
 
     try {
+      // Verificar se ainda está conectado
+      if (!this.conectado) {
+        throw new Error("WhatsApp desconectado");
+      }
+
       await this.sock.sendMessage(contato.telefone, { text: mensagem });
       console.log(`✅ Enviado para ${contato.nome}`);
 
       // Marcar como enviado no controle
-      this.controleEnvios.marcarComoEnviado(
-        contato.telefone,
-        contato.nome,
-        mensagem
-      );
+      try {
+        await this.controleEnvios.marcarComoEnviado(
+          contato.telefone,
+          contato.nome,
+          mensagem
+        );
+      } catch (dbError) {
+        console.log(
+          "⚠️ Erro ao salvar no banco, mas mensagem foi enviada:",
+          dbError.message
+        );
+      }
 
       // Mostrar qual mensagem foi enviada se houver múltiplas
       if (this.mensagens.length > 1) {
@@ -253,6 +294,16 @@ class DisparadorWhatsApp {
       }
     } catch (error) {
       console.error(`❌ Falha ao enviar para ${contato.nome}:`, error.message);
+
+      // Não quebrar a aplicação, apenas logar o erro
+      if (
+        error.message.includes("Connection Closed") ||
+        error.message.includes("WhatsApp desconectado")
+      ) {
+        console.log("🔄 Tentará reenviar quando reconectar...");
+        return false; // Indica que falhou
+      }
+
       throw error;
     }
   }
@@ -289,16 +340,29 @@ class DisparadorWhatsApp {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  async tentarReconexao() {
+    try {
+      console.log("🔄 Tentativa de reconexão...");
+      await this.configurarSocket();
+    } catch (error) {
+      console.log("❌ Reconexão falhou:", error.message);
+      console.log("🔄 Nova tentativa em 60 segundos...");
+      setTimeout(() => {
+        this.tentarReconexao();
+      }, 60000);
+    }
+  }
+
   limparAuth() {
     this.authManager.clearAuth();
   }
 
-  limparHistorico() {
-    this.controleEnvios.limparHistorico();
+  async limparHistorico() {
+    await this.controleEnvios.limparHistorico();
   }
 
-  mostrarHistorico() {
-    this.controleEnvios.mostrarHistorico();
+  async mostrarHistorico() {
+    await this.controleEnvios.mostrarHistorico();
   }
 }
 
