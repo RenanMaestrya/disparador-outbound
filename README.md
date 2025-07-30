@@ -207,6 +207,66 @@ A aplicação mostra logs detalhados:
 ⏳ Aguardando 45s antes do próximo envio...
 ```
 
+## 📱 Normalização e Verificação de Telefones
+
+A aplicação possui um sistema robusto de normalização e verificação de números de telefone que:
+
+### ✅ Validações Implementadas:
+
+- **Formato brasileiro**: Aceita números com ou sem código do país (55)
+- **DDDs específicos**: Reconhece quais DDDs precisam do 9º dígito
+- **Correção automática**: Adiciona ou remove o 9º dígito conforme necessário
+- **Validação rigorosa**: Rejeita números com formato inválido
+
+### 🔍 Verificação de Existência no WhatsApp:
+
+- **Testa se número existe**: Usa API do WhatsApp para verificar se o número está registrado
+- **Tenta variações**: Se não encontrar, testa versões com/sem 9º dígito automaticamente
+- **Evita envios desnecessários**: Só envia mensagens para números que existem
+- **Atualiza automaticamente**: Corrige o formato do número se encontrar uma variação válida
+
+### 📋 DDDs que PRECISAM do 9º dígito:
+
+- **São Paulo**: 11, 12, 13, 14, 15, 16, 17, 18, 19
+- **Rio de Janeiro**: 21, 22, 24
+- **Espírito Santo**: 27, 28
+
+### 📋 DDDs que NÃO precisam do 9º dígito:
+
+- Todos os outros (31-99): MG, PR, SC, RS, GO, etc.
+
+### 🔄 Exemplos de Normalização:
+
+```
+11999887766    → 5511999887766@c.us  ✅ (SP - mantém 9 dígitos)
+1199887766     → 5511999887766@c.us  ✅ (SP - adiciona 9º dígito)
+45999887766    → 554599887766@c.us   ✅ (SC - remove 9º dígito)
+4599887766     → 554599887766@c.us   ✅ (SC - mantém 8 dígitos)
+```
+
+### 🔍 Exemplo de Verificação no WhatsApp:
+
+```
+📱 Verificando contato João Silva...
+🔍 Verificando se João Silva existe no WhatsApp...
+⚠️ João Silva não encontrado com número original, tentando variações...
+🔄 Testando variação: 551199887766
+✅ João Silva encontrado com variação: 551199887766@s.whatsapp.net
+📞 Número atualizado para João Silva: 5511999887766@c.us → 551199887766@s.whatsapp.net
+📤 Enviando para João Silva (551199887766@s.whatsapp.net)...
+✅ Enviado para João Silva
+```
+
+### 🧪 Testar Funcionalidades:
+
+```bash
+# Testar o normalizador com vários exemplos
+node test-normalizador.js
+
+# Demonstrar verificação de existência no WhatsApp
+node test-verificacao-whatsapp.js
+```
+
 ## 🔧 Comandos Úteis
 
 ```bash
@@ -218,6 +278,12 @@ npm run dev
 
 # Limpar autenticação
 npm start -- --clear-auth
+
+# Testar normalização de telefones
+node test-normalizador.js
+
+# Demonstrar verificação de existência no WhatsApp
+node test-verificacao-whatsapp.js
 ```
 
 ## 📁 Estrutura do Projeto

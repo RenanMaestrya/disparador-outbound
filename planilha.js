@@ -93,6 +93,8 @@ class PlanilhaManager {
 
     // Processar dados (pular primeira linha que é cabeçalho)
     const contatos = [];
+    let numerosInvalidos = 0;
+
     for (let i = 1; i < dados.length; i++) {
       const linha = dados[i];
       if (linha && linha[indiceTelefone]) {
@@ -101,11 +103,27 @@ class PlanilhaManager {
         );
         const nome = indiceNome !== -1 ? linha[indiceNome] : "Contato";
 
-        contatos.push({
-          nome: nome || "Contato",
-          telefone: telefone,
-        });
+        // Só adicionar se o telefone foi normalizado com sucesso
+        if (telefone) {
+          contatos.push({
+            nome: nome || "Contato",
+            telefone: telefone,
+          });
+        } else {
+          numerosInvalidos++;
+          console.log(
+            `❌ Contato ${nome || "sem nome"} ignorado (número inválido: ${
+              linha[indiceTelefone]
+            })`
+          );
+        }
       }
+    }
+
+    if (numerosInvalidos > 0) {
+      console.log(
+        `⚠️ ${numerosInvalidos} contatos ignorados por terem números inválidos`
+      );
     }
 
     return contatos;
@@ -182,21 +200,100 @@ class PlanilhaManager {
   }
 
   formatarTelefone(telefone) {
+    // DDDs que precisam do nono dígito (capital e região metropolitana)
+    const DDDneedsAnExtraNine = [
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "21",
+      "22",
+      "24",
+      "27",
+      "28",
+    ];
+
+    if (!telefone || typeof telefone !== "string") {
+      console.log("⚠️ Telefone inválido:", telefone);
+      return null;
+    }
+
+    // Remove sufixo do WhatsApp se existir
+    let raw = telefone.replace(/@(c\.us|s\.whatsapp\.net)$/, "");
+
     // Remove todos os caracteres não numéricos
-    let numero = telefone.replace(/\D/g, "");
+    const digits = raw.replace(/\D/g, "");
 
-    // Se começar com 0, remove
-    if (numero.startsWith("0")) {
-      numero = numero.substring(1);
+    let ddd = "",
+      number = "";
+
+    // Processar números com código do país (55)
+    if (digits.startsWith("55") && digits.length >= 12) {
+      ddd = digits.substring(2, 4);
+      number = digits.substring(4);
+    }
+    // Processar números sem código do país
+    else if (digits.length === 11 || digits.length === 10) {
+      ddd = digits.substring(0, 2);
+      number = digits.substring(2);
+    }
+    // Número muito curto ou muito longo
+    else {
+      console.log(
+        `⚠️ Número com formato inválido: ${telefone} (${digits.length} dígitos)`
+      );
+      return null;
     }
 
-    // Se não começar com 55 (código do Brasil), adiciona
-    if (!numero.startsWith("55")) {
-      numero = "55" + numero;
+    // Validar DDD brasileiro (11-89, excluindo alguns não utilizados)
+    const dddNum = parseInt(ddd);
+    const dddsInvalidos = [
+      20, 23, 25, 26, 29, 30, 36, 39, 40, 50, 52, 56, 57, 58, 59, 60, 70, 72,
+      76, 78, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,
+    ];
+
+    if (dddNum < 11 || dddNum > 89 || dddsInvalidos.includes(dddNum)) {
+      console.log(`⚠️ DDD inválido: ${ddd} no número ${telefone}`);
+      return null;
     }
 
-    // Adiciona @c.us para WhatsApp
-    return numero + "@c.us";
+    // Remover 9 inicial desnecessário para DDDs que não precisam
+    if (
+      !DDDneedsAnExtraNine.includes(ddd) &&
+      number.length === 9 &&
+      number.startsWith("9")
+    ) {
+      number = number.substring(1);
+    }
+
+    // Adicionar 9 inicial para DDDs que precisam (celulares de 8 dígitos)
+    if (DDDneedsAnExtraNine.includes(ddd) && number.length === 8) {
+      number = "9" + number;
+    }
+
+    // Validar tamanho final do número
+    const expectedLength = DDDneedsAnExtraNine.includes(ddd) ? 9 : 8;
+    if (number.length !== expectedLength) {
+      console.log(
+        `⚠️ Número com tamanho incorreto para DDD ${ddd}: ${number} (esperado: ${expectedLength} dígitos)`
+      );
+      return null;
+    }
+
+    // Construir número final
+    const numeroNormalizado = `55${ddd}${number}@c.us`;
+
+    // Log apenas para debug (pode remover depois)
+    if (numeroNormalizado !== `55${digits}@c.us`) {
+      console.log(`📱 Número normalizado: ${telefone} → ${numeroNormalizado}`);
+    }
+
+    return numeroNormalizado;
   }
 
   async criarPlanilhaExemplo() {

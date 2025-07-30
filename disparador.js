@@ -249,7 +249,204 @@ class DisparadorWhatsApp {
     this.disparoEmAndamento = false;
   }
 
+  /**
+   * Verifica se um número existe no WhatsApp e tenta variações se necessário
+   * @param {string} telefoneOriginal - Número formatado inicialmente
+   * @param {string} nome - Nome do contato para logs
+   * @returns {Promise<string|null>} - Número válido ou null se não encontrado
+   */
+  async verificarEValidarNumero(telefoneOriginal, nome) {
+    try {
+      // Extrair apenas os dígitos do número original (sem @c.us)
+      const numeroLimpo = telefoneOriginal.replace(/@c\.us$/, "");
+
+      // Testar o número original primeiro
+      console.log(`🔍 Verificando se ${nome} existe no WhatsApp...`);
+
+      let numeroParaTestar = numeroLimpo;
+      let resultado = await this.testarNumeroNoWhatsApp(numeroParaTestar);
+
+      if (resultado.exists) {
+        console.log(`✅ ${nome} encontrado no WhatsApp: ${resultado.jid}`);
+        return resultado.jid;
+      }
+
+      // Se não existir, tentar variações do número
+      console.log(
+        `⚠️ ${nome} não encontrado com número original, tentando variações...`
+      );
+
+      const variacoes = this.gerarVariacoesNumero(numeroLimpo);
+
+      for (const variacao of variacoes) {
+        console.log(`🔄 Testando variação: ${variacao}`);
+
+        resultado = await this.testarNumeroNoWhatsApp(variacao);
+
+        if (resultado.exists) {
+          console.log(`✅ ${nome} encontrado com variação: ${resultado.jid}`);
+          return resultado.jid;
+        }
+
+        // Pequena pausa entre tentativas para não sobrecarregar
+        await this.sleep(1000);
+      }
+
+      console.log(
+        `❌ ${nome} não foi encontrado no WhatsApp após testar todas as variações`
+      );
+      return null;
+    } catch (error) {
+      console.log(`⚠️ Erro ao verificar número de ${nome}:`, error.message);
+      // Em caso de erro, retornar o número original para tentar enviar mesmo assim
+      return telefoneOriginal;
+    }
+  }
+
+  /**
+   * Testa se um número específico existe no WhatsApp
+   * @param {string} numero - Número para testar (sem @c.us)
+   * @returns {Promise<{exists: boolean, jid?: string}>}
+   */
+  async testarNumeroNoWhatsApp(numero) {
+    try {
+      if (!this.sock || !this.conectado) {
+        throw new Error("WhatsApp não está conectado");
+      }
+
+      const [resultado] = await this.sock.onWhatsApp(numero);
+      return resultado || { exists: false };
+    } catch (error) {
+      console.log(`⚠️ Erro ao testar número ${numero}:`, error.message);
+      return { exists: false };
+    }
+  }
+
+  /**
+   * Gera variações do número para tentar diferentes formatos
+   * @param {string} numeroOriginal - Número original sem @c.us
+   * @returns {string[]} - Array de variações para testar
+   */
+  gerarVariacoesNumero(numeroOriginal) {
+    const variacoes = [];
+
+    // Extrair dígitos do número
+    const digits = numeroOriginal.replace(/\D/g, "");
+
+    // Se começar com 55 (código do Brasil)
+    if (digits.startsWith("55") && digits.length >= 12) {
+      const ddd = digits.substring(2, 4);
+      const numero = digits.substring(4);
+
+      // Variações para DDDs que podem ou não ter 9º dígito
+      const DDDneedsAnExtraNine = [
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "21",
+        "22",
+        "24",
+        "27",
+        "28",
+      ];
+
+      if (DDDneedsAnExtraNine.includes(ddd)) {
+        // Para DDDs que precisam do 9º dígito
+        if (numero.length === 9 && numero.startsWith("9")) {
+          // Tentar remover o 9 (caso seja um número antigo)
+          variacoes.push(`55${ddd}${numero.substring(1)}`);
+        } else if (numero.length === 8) {
+          // Tentar adicionar o 9
+          variacoes.push(`55${ddd}9${numero}`);
+        }
+      } else {
+        // Para DDDs que não precisam do 9º dígito
+        if (numero.length === 9 && numero.startsWith("9")) {
+          // Tentar remover o 9
+          variacoes.push(`55${ddd}${numero.substring(1)}`);
+        } else if (numero.length === 8) {
+          // Tentar adicionar o 9 (às vezes pode estar incorreto)
+          variacoes.push(`55${ddd}9${numero}`);
+        }
+      }
+    } else if (digits.length >= 10) {
+      // Número sem código do país
+      const ddd = digits.substring(0, 2);
+      const numero = digits.substring(2);
+
+      const DDDneedsAnExtraNine = [
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "21",
+        "22",
+        "24",
+        "27",
+        "28",
+      ];
+
+      // Gerar variações com código do país
+      if (DDDneedsAnExtraNine.includes(ddd)) {
+        if (numero.length === 9 && numero.startsWith("9")) {
+          variacoes.push(`55${ddd}${numero.substring(1)}`); // Remover 9
+        } else if (numero.length === 8) {
+          variacoes.push(`55${ddd}9${numero}`); // Adicionar 9
+        }
+      } else {
+        if (numero.length === 9 && numero.startsWith("9")) {
+          variacoes.push(`55${ddd}${numero.substring(1)}`); // Remover 9
+        } else if (numero.length === 8) {
+          variacoes.push(`55${ddd}9${numero}`); // Adicionar 9
+        }
+      }
+
+      // Também testar versão com código do país mantendo o formato original
+      variacoes.push(`55${digits}`);
+    }
+
+    // Remover duplicatas e o número original
+    return [...new Set(variacoes)].filter(
+      (v) => v !== numeroOriginal.replace(/\D/g, "")
+    );
+  }
+
   async enviarMensagem(contato) {
+    // Verificar se o contato existe no WhatsApp antes de enviar
+    console.log(`📱 Verificando contato ${contato.nome}...`);
+
+    const telefoneValido = await this.verificarEValidarNumero(
+      contato.telefone,
+      contato.nome
+    );
+
+    if (!telefoneValido) {
+      console.log(
+        `❌ ${contato.nome} não foi encontrado no WhatsApp. Pulando envio.`
+      );
+      return false;
+    }
+
+    // Atualizar o telefone do contato se foi encontrada uma variação diferente
+    const telefoneOriginal = contato.telefone;
+    if (telefoneValido !== telefoneOriginal) {
+      console.log(
+        `📞 Número atualizado para ${contato.nome}: ${telefoneOriginal} → ${telefoneValido}`
+      );
+      contato.telefone = telefoneValido;
+    }
+
     // Escolher mensagem aleatória se existirem mensagens na planilha
     let mensagem;
     if (this.mensagens.length > 0) {
